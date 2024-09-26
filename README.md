@@ -20,10 +20,10 @@ This example will use NGINX and keepalived.
 #!/bin/bash
 # replace these values
 HA_EIP=<YOUR HIGH AVAILABILITY ELASTIC IP>
-INSTANCE_IDS=<THE IDS OF ALL PEERS>
+HA_PEERS=<THE PRIVATE IPs OF ALL HIGH AVAILABILITY PEERS>
 TOKEN=<FLOW API TOKEN>
 
-/opt/ha-flow -eip=$HA_EIP -instance_ids=$INSTANCE_IDS -token=$TOKEN 
+/opt/ha-flow -eip=$HA_EIP -peers=$HA_PEERS -token=$TOKEN 
 ```
 
 4. Set up a master/backup configuration using

@@ -56,6 +56,12 @@ func main() {
 		elasticIP.Attachment.ID,
 	))
 
+	// check if already attached to target instance
+	if elasticIP.PrivateIP == privateIP {
+		slog.Info("elastic ip already attached to target instance")
+		return
+	}
+
 	// detach from failed master
 	failedInstanceEIPService := compute.NewServerElasticIPService(client, elasticIP.Attachment.ID)
 	failOnErr(failedInstanceEIPService.Detach(ctx, elasticIP.ID))

@@ -10,14 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"slices"
-	"strings"
 	"time"
 )
 
 var (
 	flagToken = ""
-	flagIPs   = ""
+	flagIP    = ""
 	flagEIP   = ""
 )
 
@@ -25,7 +23,7 @@ func main() {
 	// init flags
 	flag.StringVar(&flagToken, "token", "", "MyFlow API token")
 	flag.StringVar(&flagEIP, "eip", "", "High-Availability Elastic IP")
-	flag.StringVar(&flagIPs, "peers", "", "High-Availability Instance Private IPs (comma-separated)")
+	flag.StringVar(&flagIP, "ip", "", "Instance Private IP")
 	flag.Parse()
 
 	// validate flags
@@ -33,7 +31,7 @@ func main() {
 	failOnErr(err)
 	haEIP, err := checkFlagEIP()
 	failOnErr(err)
-	haPeerIPs, err := checkFlagIPs()
+	privateIP, err := checkFlagIP()
 	failOnErr(err)
 
 	// init logging
@@ -48,6 +46,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
+	// find current attachment of EIP
 	elasticIP, err := findElasticIPID(ctx, eipService, haEIP)
 	failOnErr(err)
 	slog.Info(fmt.Sprintf(
@@ -57,7 +56,7 @@ func main() {
 		elasticIP.Attachment.ID,
 	))
 
-	// detach from current
+	// detach from failed master
 	failedInstanceEIPService := compute.NewServerElasticIPService(client, elasticIP.Attachment.ID)
 	failOnErr(failedInstanceEIPService.Detach(ctx, elasticIP.ID))
 	slog.Info(fmt.Sprintf("detached elastic ip from instance '%v' with id '%v'",
@@ -65,14 +64,11 @@ func main() {
 		elasticIP.Attachment.ID,
 	))
 
-	// remove failed peer from peer list
-	candidatePrivateIPs := filterPeers(haPeerIPs, elasticIP.PrivateIP)
-
-	// choose instance using peer list
-	target, err := pickFailOverTarget(ctx, serverService, candidatePrivateIPs)
+	// find instance
+	target, err := findFailOverTarget(ctx, serverService, privateIP)
 	failOnErr(err)
 	slog.Info(fmt.Sprintf(
-		"picked target instance '%v' with id '%v' for failover",
+		"found target instance '%v' with id '%v' for failover",
 		target.InstanceName,
 		target.InstanceID,
 	))
@@ -117,19 +113,12 @@ func checkFlagEIP() (string, error) {
 	return flagEIP, nil
 }
 
-func checkFlagIPs() ([]string, error) {
-	ipVals := strings.Split(flagIPs, ",")
-	ips := make([]string, len(ipVals))
-
-	for idx, val := range ipVals {
-		ip := net.ParseIP(val)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid ip: %v", val)
-		}
-		ips[idx] = ip.String()
+func checkFlagIP() (string, error) {
+	ip := net.ParseIP(flagIP)
+	if ip == nil {
+		return "", fmt.Errorf("invalid ip: %v", ip)
 	}
-
-	return ips, nil
+	return ip.String(), nil
 }
 
 func findElasticIPID(
@@ -169,10 +158,10 @@ type Target struct {
 	AttachedEIP        compute.ElasticIP
 }
 
-func pickFailOverTarget(
+func findFailOverTarget(
 	ctx context.Context,
 	service compute.ServerService,
-	peersPrivateIPs []string,
+	privateIP string,
 ) (Target, error) {
 	instances, err := service.List(ctx, goclient.Cursor{NoFilter: 1})
 	if err != nil {
@@ -192,11 +181,7 @@ func pickFailOverTarget(
 		}
 
 		for _, networkInterface := range networkInterfaces.Items {
-			inPeers := slices.ContainsFunc(peersPrivateIPs, func(ip string) bool {
-				return networkInterface.PrivateIP == ip
-			})
-
-			if inPeers {
+			if networkInterface.PrivateIP == privateIP {
 				return Target{
 					InstanceID:         instance.ID,
 					InstanceName:       instance.Name,
@@ -207,7 +192,7 @@ func pickFailOverTarget(
 		}
 	}
 
-	return Target{}, errors.New("no available instance found")
+	return Target{}, fmt.Errorf("fail over instance with private ip %v not found", privateIP)
 }
 
 func prepareTarget(ctx context.Context, target Target, service compute.ServerElasticIPService) error {
